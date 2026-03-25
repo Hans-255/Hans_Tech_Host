@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: bot-dashboard-api
+    runtime: node
+    rootDir: artifacts/api-server
+    buildCommand: npm install && npm run build
+    startCommand: node dist/index.js
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8080
+
+  - type: web
+    name: bot-dashboard-frontend
+    runtime: static
+    rootDir: artifacts/bot-dashboard
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist/public
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

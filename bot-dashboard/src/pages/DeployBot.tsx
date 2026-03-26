@@ -7,6 +7,8 @@ import { useAuth } from "@/App";
 
 const REQUIRED_KEYS = ["SESSION_ID", "OWNER_NUMBER"];
 const HIDDEN_KEYS = ["HEROKU_APP_NAME", "BRANCH"];
+const HEROKU_DEPLOY_URL =
+  "https://dashboard.heroku.com/new?team=team-bots-23&template=https%3A%2F%2Fgithub.com%2FHans-255%2FVortex-Xmd-Bot";
 
 function CapacityBar({ info }: { info: DeployInfo }) {
   const pct = Math.min(100, Math.round((info.globalTotal / info.globalMax) * 100));
@@ -83,6 +85,7 @@ export default function DeployBot() {
       toast({ title: "🚀 Bot deployment started!", description: data.message });
       qc.invalidateQueries({ queryKey: ["bots"] });
       qc.invalidateQueries({ queryKey: ["env-defaults"] });
+      window.open(HEROKU_DEPLOY_URL, "_blank");
       navigate("/");
     },
     onError: (e: any) => {

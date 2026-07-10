@@ -12,8 +12,6 @@
   "dependencies": {
     "@types/jsonwebtoken": "^9.0.10",
     "@types/pg": "^8.18.0",
-    "@workspace/api-zod": "workspace:*",
-    "@workspace/db": "workspace:*",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2",

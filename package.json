@@ -5,10 +5,15 @@
   "scripts": {
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
-    "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "heroku-postbuild": "PORT=3000 BASE_PATH=/bot-dashboard/ VITE_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID pnpm --filter @workspace/bot-dashboard run build && node scripts/copy-frontend.mjs && pnpm --filter @workspace/api-server run build",
+    "start": "node api-server/dist/index.mjs"
   },
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.26.1",
   "devDependencies": {
     "typescript": "~5.9.2",
     "prettier": "^3.8.1"

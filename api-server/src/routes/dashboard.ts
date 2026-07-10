@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { Pool } from "pg";
 import fs from "fs";
 import path from "path";
+import { OAuth2Client } from "google-auth-library";
 
 const router = Router();
 
@@ -16,7 +17,20 @@ const pool = new Pool({
     : undefined,
 });
 
-const JWT_SECRET = process.env.JWT_SECRET || "bd-jwt-secret-changeme-2024";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required but was not provided.");
+}
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
+
+async function maybeGrantAdmin(userId: number, email: string) {
+  if (ADMIN_EMAIL && email.toLowerCase().trim() === ADMIN_EMAIL) {
+    await pool.query("UPDATE bd_users SET is_admin = TRUE WHERE id = $1", [userId]);
+  }
+}
 
 // Auto-create tables and admin account on startup
 export async function initDb() {
@@ -31,9 +45,12 @@ export async function initDb() {
       last_claim_date DATE,
       is_admin BOOLEAN NOT NULL DEFAULT FALSE,
       extra_passwords TEXT[],
+      google_id TEXT UNIQUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE bd_users ALTER COLUMN password_hash DROP NOT NULL;
+    ALTER TABLE bd_users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE;
     CREATE TABLE IF NOT EXISTS bd_bots (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES bd_users(id) ON DELETE CASCADE,
@@ -67,18 +84,12 @@ export async function initDb() {
     );
   `);
 
-  // Create admin account if not exists
-  const adminEmail = "kinghanstz@gmail.com";
-  const existing = await pool.query("SELECT id FROM bd_users WHERE email=$1", [adminEmail]);
-  if (!existing.rows[0]) {
-    const bcryptjs = await import("bcryptjs");
-    const hash = await bcryptjs.hash("Dodoma2006#", 10);
-    await pool.query(
-      `INSERT INTO bd_users (email, name, password_hash, xd_coins, is_admin)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [adminEmail, "HansTz Admin", hash, 9999999999, true]
-    );
-    console.log("Admin account created: kinghanstz@gmail.com");
+  // Grant admin rights to the configured admin account if they've signed up (via
+  // password or Google). We never create the account or set a password here —
+  // the admin signs up like any other user, then is promoted based on email.
+  const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
+  if (adminEmail) {
+    await pool.query("UPDATE bd_users SET is_admin = TRUE WHERE email = $1", [adminEmail]);
   }
   console.log("Database initialized");
 }
@@ -143,11 +154,11 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
   const token = auth.slice(7);
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: number };
+    const decoded = jwt.verify(token, JWT_SECRET as string) as { userId: number };
     const result = await pool.query("SELECT * FROM bd_users WHERE id = $1", [decoded.userId]);
     if (!result.rows[0]) return res.status(401).json({ error: "User not found" });
     (req as any).user = result.rows[0];
-    next();
+    return next();
   } catch {
     return res.status(401).json({ error: "Invalid token" });
   }
@@ -176,10 +187,53 @@ router.post("/bd/auth/register", async (req: Request, res: Response) => {
       `INSERT INTO bd_transactions (user_id, type, amount, description) VALUES ($1,$2,$3,$4)`,
       [user.id, "signup_bonus", SIGNUP_BONUS_XD, "Welcome bonus for new users"]
     );
+    await maybeGrantAdmin(user.id, user.email);
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "30d" });
     return res.json({ token, user: sanitizeUser(user), isNew: true });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/bd/auth/google", async (req: Request, res: Response) => {
+  if (!googleClient) return res.status(500).json({ error: "Google sign-in is not configured on the server." });
+  const { credential } = req.body;
+  if (!credential) return res.status(400).json({ error: "credential is required" });
+  try {
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+    const payload = ticket.getPayload();
+    if (!payload?.email) return res.status(401).json({ error: "Invalid Google credential" });
+
+    const email = payload.email.toLowerCase().trim();
+    const googleId = payload.sub;
+    const name = payload.name || email.split("@")[0];
+    const avatarUrl = payload.picture || null;
+
+    let result = await pool.query("SELECT * FROM bd_users WHERE google_id = $1 OR email = $2", [googleId, email]);
+    let user = result.rows[0];
+    let isNew = false;
+
+    if (!user) {
+      const inserted = await pool.query(
+        `INSERT INTO bd_users (email, name, google_id, avatar_url, xd_coins) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [email, name, googleId, avatarUrl, SIGNUP_BONUS_XD]
+      );
+      user = inserted.rows[0];
+      isNew = true;
+      await pool.query(
+        `INSERT INTO bd_transactions (user_id, type, amount, description) VALUES ($1,$2,$3,$4)`,
+        [user.id, "signup_bonus", SIGNUP_BONUS_XD, "Welcome bonus for new users"]
+      );
+    } else if (!user.google_id) {
+      await pool.query("UPDATE bd_users SET google_id = $1 WHERE id = $2", [googleId, user.id]);
+      user.google_id = googleId;
+    }
+
+    await maybeGrantAdmin(user.id, user.email);
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "30d" });
+    return res.json({ token, user: sanitizeUser(user), isNew });
+  } catch (err: any) {
+    return res.status(401).json({ error: "Google sign-in failed: " + err.message });
   }
 });
 
@@ -197,6 +251,7 @@ router.post("/bd/auth/login", async (req: Request, res: Response) => {
       }
     }
     if (!ok) return res.status(401).json({ error: "Invalid email or password" });
+    await maybeGrantAdmin(user.id, user.email);
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "30d" });
     return res.json({ token, user: sanitizeUser(user), isNew: false });
   } catch (err: any) {
@@ -517,7 +572,7 @@ router.get("/bd/payments", authMiddleware, async (req: Request, res: Response) =
 function adminMiddleware(req: Request, res: Response, next: NextFunction) {
   const user = (req as any).user;
   if (!user?.is_admin) return res.status(403).json({ error: "Admin only" });
-  next();
+  return next();
 }
 
 router.post("/bd/admin/payments/:id/approve", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {

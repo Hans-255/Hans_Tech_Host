@@ -33,6 +33,11 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ email, password, name, avatar_url }),
       }),
+    google: (credential: string) =>
+      request<{ token: string; user: User; isNew: boolean }>("/bd/auth/google", {
+        method: "POST",
+        body: JSON.stringify({ credential }),
+      }),
     me: () => request<{ user: User }>("/bd/auth/me"),
     logout: () => request("/bd/auth/logout", { method: "POST" }),
     deleteAccount: () => request("/bd/auth/account", { method: "DELETE" }),
@@ -71,7 +76,7 @@ export const api = {
   },
   config: {
     envDefaults: () =>
-      request<{ defaults: Record<string, string>; deployInfo: { cost: number; maxBots: number } }>("/bd/config/env-defaults"),
+      request<{ defaults: Record<string, string>; deployInfo: DeployInfo }>("/bd/config/env-defaults"),
   },
   admin: {
     users: () => request<{ users: AdminUser[] }>("/bd/admin/users"),

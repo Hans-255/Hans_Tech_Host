@@ -35,10 +35,8 @@ minimumReleaseAgeExclude:
   - stripe-replit-sync
 
 packages:
-  - artifacts/*
-  - lib/*
-  - lib/integrations/*
-  - scripts
+  - api-server
+  - bot-dashboard
 
 catalog:
   '@replit/vite-plugin-cartographer': ^0.5.1

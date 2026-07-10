@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
+import { GoogleLogin } from "@react-oauth/google";
 import { useAuth } from "@/App";
 import { api } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -59,6 +60,23 @@ export default function Login() {
       setAvatarBase64(compressed);
     } catch {
       toast({ title: "Could not process image", variant: "destructive" });
+    }
+  }
+
+  async function handleGoogleSuccess(credential: string) {
+    setLoading(true);
+    try {
+      const data = await api.auth.google(credential);
+      localStorage.setItem("bd_token", data.token);
+      setUser(data.user);
+      toast({
+        title: data.isNew ? "Welcome! You got 10 free XD coins!" : `Welcome back, ${data.user.name}!`,
+      });
+      navigate("/");
+    } catch (err: any) {
+      toast({ title: "Google sign-in failed", description: err.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -234,6 +252,21 @@ export default function Login() {
               )}
             </button>
           </form>
+
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-gray-800" />
+            <span className="text-xs text-gray-500">or</span>
+            <div className="flex-1 h-px bg-gray-800" />
+          </div>
+
+          <div className="flex justify-center">
+            <GoogleLogin
+              onSuccess={(cred) => cred.credential && handleGoogleSuccess(cred.credential)}
+              onError={() => toast({ title: "Google sign-in failed", variant: "destructive" })}
+              theme="filled_black"
+              shape="pill"
+            />
+          </div>
 
           <div className="mt-6 pt-5 border-t border-gray-800">
             <div className="grid grid-cols-3 gap-4 text-center">

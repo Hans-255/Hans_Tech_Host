@@ -147,9 +147,9 @@ router.post("/vortex/session", (req, res) => {
     // 4. Restart bot process (workflow auto-restarts on exit)
     exec("pkill -f 'vortex-xmd/index.js' || true", () => {});
 
-    res.json({ success: true, sessionId, message: "Session updated — bot is restarting." });
+    return res.json({ success: true, sessionId, message: "Session updated — bot is restarting." });
   } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
+    return res.status(500).json({ success: false, error: e.message });
   }
 });
 

@@ -76,7 +76,11 @@ export const api = {
   },
   config: {
     envDefaults: () =>
-      request<{ defaults: Record<string, string>; deployInfo: DeployInfo }>("/bd/config/env-defaults"),
+      request<{
+        defaults: Record<string, string>;
+        deployInfo: DeployInfo;
+        links: { getSessionIdUrl: string; herokuDeployTemplateUrl: string };
+      }>("/bd/config/env-defaults"),
   },
   admin: {
     users: () => request<{ users: AdminUser[] }>("/bd/admin/users"),

@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import fs from "fs";
 import path from "path";
 import { OAuth2Client } from "google-auth-library";
+import { LINKS, BOT_ENV_DEFAULTS, botRepoTarballApiUrl } from "../config";
 
 const router = Router();
 
@@ -124,19 +125,6 @@ function toDateStr(d: any): string | null {
   if (d instanceof Date) return d.toISOString().split("T")[0];
   return String(d).split("T")[0];
 }
-
-const BOT_ENV_DEFAULTS: Record<string, string> = {
-  BOT_NAME: "VORTEX-XMD",
-  OWNER_NAME: "HansTz",
-  OWNER_NUMBER: "",
-  PREFIX: ".",
-  MODE: "public",
-  ANTI_CALL: "false",
-  ANTI_DELETE: "false",
-  SESSION_ID: "",
-  GROUP_INVITE_LINK: "DsoPcRpOcCg73qya4cFeD3",
-  CHANNEL_LINK: "https://whatsapp.com/channel/0029Vb7JRfvCRs1gTmsCB812",
-};
 
 function getHerokuConfig(): { api_key: string; team: string } {
   const paths = [
@@ -392,7 +380,8 @@ router.post("/bd/bots", authMiddleware, async (req: Request, res: Response) => {
     [user.id, "deploy", -DEPLOY_COST_XD, `Deployed bot: ${bot_name}`]
   );
 
-  deployToHeroku(bot.id, herokuCfg.api_key, herokuAppName, herokuCfg.team, mergedEnv).catch(console.error);
+  const publicOrigin = `${req.protocol}://${req.get("host")}`;
+  deployToHeroku(bot.id, herokuCfg.api_key, herokuAppName, herokuCfg.team, mergedEnv, publicOrigin).catch(console.error);
   return res.json({ bot: sanitizeBot(bot), message: "Bot is being deployed to Heroku..." });
 });
 
@@ -403,12 +392,41 @@ async function appendLog(botId: number, log: string) {
   );
 }
 
+// The bot repo is private, so Heroku's build API (which fetches the tarball
+// URL itself, unauthenticated) can't pull it directly from GitHub. We proxy
+// it through our own server — authenticated with our GITHUB_TOKEN — so
+// Heroku can fetch a plain, public URL instead.
+router.get("/bd/deploy-template.tar.gz", async (_req: Request, res: Response) => {
+  const token = process.env.GITHUB_TOKEN || "";
+  try {
+    const ghRes = await fetch(botRepoTarballApiUrl(), {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        "User-Agent": "hans-tech-host",
+        Accept: "application/vnd.github+json",
+      },
+      redirect: "follow",
+    });
+    if (!ghRes.ok || !ghRes.body) {
+      return res.status(502).json({ error: `Failed to fetch bot template (${ghRes.status})` });
+    }
+    res.setHeader("Content-Type", "application/gzip");
+    // @ts-ignore - Node's Response body is a web ReadableStream; pipe it through.
+    const { Readable } = await import("stream");
+    Readable.fromWeb(ghRes.body as any).pipe(res);
+    return;
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 async function deployToHeroku(
   botId: number,
   apiKey: string,
   appName: string,
   team: string,
-  envConfig: Record<string, string>
+  envConfig: Record<string, string>,
+  publicOrigin: string
 ) {
   const headers = {
     Authorization: `Bearer ${apiKey}`,
@@ -434,7 +452,7 @@ async function deployToHeroku(
         await appendLog(botId, `[${ts()}] App name conflict — retrying with suffix...`);
         const altName = `${appName.slice(0, 25)}-${Math.floor(Math.random() * 999)}`;
         await pool.query("UPDATE bd_bots SET heroku_app_name=$1 WHERE id=$2", [altName, botId]);
-        await deployToHeroku(botId, apiKey, altName, team, { ...envConfig, HEROKU_APP_NAME: altName });
+        await deployToHeroku(botId, apiKey, altName, team, { ...envConfig, HEROKU_APP_NAME: altName }, publicOrigin);
         return;
       }
       throw new Error(`Create app failed: ${err?.message || createRes.statusText}`);
@@ -452,13 +470,16 @@ async function deployToHeroku(
     if (!cfgRes.ok) throw new Error(`Config vars failed: ${await cfgRes.text()}`);
     await appendLog(botId, `[${ts()}] ENV vars set ✅`);
 
-    // Use Heroku Build API directly with GitHub tarball (more reliable than app-setups)
-    const tarballUrl = "https://github.com/Hans-255/Vortex-Xmd-Bot/archive/refs/heads/main.tar.gz";
-    await appendLog(botId, `[${ts()}] Building from GitHub repo...`);
+    // Use Heroku Build API directly with a tarball of the bot repo (more reliable
+    // than app-setups). The repo is private, so we proxy it through our own
+    // server (see /bd/deploy-template.tar.gz) instead of pointing Heroku at
+    // GitHub directly, which it can't authenticate against.
+    const tarballUrl = `${publicOrigin}/api/bd/deploy-template.tar.gz`;
+    await appendLog(botId, `[${ts()}] Building from GitHub repo (${LINKS.BOT_REPO_OWNER}/${LINKS.BOT_REPO_NAME})...`);
     const buildRes = await fetch(`https://api.heroku.com/apps/${appName}/builds`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ source_blob: { url: tarballUrl, version: "main" } }),
+      body: JSON.stringify({ source_blob: { url: tarballUrl, version: LINKS.BOT_REPO_BRANCH } }),
     });
     if (!buildRes.ok) {
       const errText = await buildRes.text();
@@ -668,6 +689,10 @@ router.get("/bd/config/env-defaults", async (_req: Request, res: Response) => {
   const totalDeployed = parseInt(globalCount.rows[0].count);
   return res.json({
     defaults: BOT_ENV_DEFAULTS,
+    links: {
+      getSessionIdUrl: LINKS.GET_SESSION_ID_URL,
+      herokuDeployTemplateUrl: LINKS.HEROKU_DEPLOY_TEMPLATE_URL,
+    },
     deployInfo: {
       cost: DEPLOY_COST_XD,
       maxBots: MAX_BOTS_PER_USER,

@@ -7,8 +7,6 @@ import { useAuth } from "@/App";
 
 const REQUIRED_KEYS = ["SESSION_ID", "OWNER_NUMBER"];
 const HIDDEN_KEYS = ["HEROKU_APP_NAME", "BRANCH"];
-const HEROKU_DEPLOY_URL =
-  "https://dashboard.heroku.com/new?team=team-bots-23&template=https%3A%2F%2Fgithub.com%2FHans-255%2FVortex-Xmd-Bot";
 
 function CapacityBar({ info }: { info: DeployInfo }) {
   const pct = Math.min(100, Math.round((info.globalTotal / info.globalMax) * 100));
@@ -46,6 +44,8 @@ export default function DeployBot() {
   const deployInfo: DeployInfo = configData?.deployInfo || {
     cost: 10, maxBots: 5, globalTotal: 0, globalMax: 100, serverFull: false,
   };
+  const getSessionIdUrl = configData?.links?.getSessionIdUrl || "https://session-id-fc1f69d1fcb5.herokuapp.com";
+  const herokuDeployUrl = configData?.links?.herokuDeployTemplateUrl;
 
   const [botName, setBotName] = useState("");
   const [envConfig, setEnvConfig] = useState<Record<string, string>>({});
@@ -85,7 +85,7 @@ export default function DeployBot() {
       toast({ title: "🚀 Bot deployment started!", description: data.message });
       qc.invalidateQueries({ queryKey: ["bots"] });
       qc.invalidateQueries({ queryKey: ["env-defaults"] });
-      window.open(HEROKU_DEPLOY_URL, "_blank");
+      if (herokuDeployUrl) window.open(herokuDeployUrl, "_blank");
       navigate("/");
     },
     onError: (e: any) => {
@@ -127,7 +127,7 @@ export default function DeployBot() {
         <button onClick={() => navigate("/")} className="text-gray-400 hover:text-white transition-colors text-lg">←</button>
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-white">Deploy New Bot</h1>
-          <p className="text-gray-400 text-sm">VORTEX-XMD · Costs {deployInfo.cost} XD coins</p>
+          <p className="text-gray-400 text-sm">HANS-XMD · Costs {deployInfo.cost} XD coins</p>
         </div>
       </div>
 
@@ -216,7 +216,7 @@ export default function DeployBot() {
                   onChange={e => handleEnvChange(key, e.target.value)}
                   disabled={serverFull}
                   placeholder={
-                    key === "SESSION_ID" ? "Paste your SESSION_ID (starts with HansTz&...)"
+                    key === "SESSION_ID" ? "Paste your SESSION_ID here"
                     : key === "OWNER_NUMBER" ? "e.g. 255712345678"
                     : `Enter ${key}`
                   }
@@ -224,6 +224,16 @@ export default function DeployBot() {
                     REQUIRED_KEYS.includes(key) && !envConfig[key] && !serverFull ? "border-red-500/50" : "border-gray-700"
                   }`}
                 />
+                {key === "SESSION_ID" && (
+                  <a
+                    href={getSessionIdUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-purple-300 hover:text-purple-200 bg-purple-500/10 border border-purple-500/30 rounded-lg px-3 py-1.5 transition-colors"
+                  >
+                    🔑 Get Session ID
+                  </a>
+                )}
               </div>
             ))}
           </div>
@@ -233,10 +243,13 @@ export default function DeployBot() {
         <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 text-xs text-gray-400">
           <p className="font-medium text-blue-300 mb-2">ℹ️ How to get SESSION_ID</p>
           <ol className="list-decimal list-inside space-y-1">
-            <li>Visit <a href="https://hans-sessions.replit.app" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:underline">Hans Sessions</a></li>
-            <li>Enter your WhatsApp number</li>
-            <li>Use code <span className="font-bold text-white">HANSTECH</span> in WhatsApp</li>
-            <li>Copy the SESSION_ID (starts with <span className="text-white font-bold">HansTz&</span>) and paste above</li>
+            <li>Tap <span className="font-bold text-white">Get Session ID</span> above, or visit{" "}
+              <a href={getSessionIdUrl} target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:underline">
+                {getSessionIdUrl.replace(/^https?:\/\//, "")}
+              </a>
+            </li>
+            <li>Follow the on-screen steps to link your WhatsApp number</li>
+            <li>Copy the SESSION_ID it gives you and paste it above</li>
           </ol>
         </div>
 

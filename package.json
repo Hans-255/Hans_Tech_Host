@@ -6,7 +6,7 @@
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck": "pnpm -r --if-present run typecheck",
-    "heroku-postbuild": "PORT=3000 BASE_PATH=/bot-dashboard/ VITE_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID pnpm --filter @workspace/bot-dashboard run build && node scripts/copy-frontend.mjs && pnpm --filter @workspace/api-server run build",
+    "heroku-postbuild": "PORT=3000 BASE_PATH=/bot-dashboard/ VITE_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID pnpm --filter @workspace/bot-dashboard run build && pnpm --filter @workspace/api-server run build && node scripts/copy-frontend.mjs",
     "start": "node api-server/dist/index.mjs"
   },
   "private": true,

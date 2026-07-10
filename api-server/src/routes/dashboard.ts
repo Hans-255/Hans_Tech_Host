@@ -113,6 +113,11 @@ function sanitizeUser(u: any) {
   return safe;
 }
 
+function sanitizeBot(b: any) {
+  const { heroku_api_key, ...safe } = b;
+  return safe;
+}
+
 function toDateStr(d: any): string | null {
   if (!d) return null;
   if (typeof d === "string") return d.split("T")[0];
@@ -187,7 +192,10 @@ router.post("/bd/auth/register", async (req: Request, res: Response) => {
       `INSERT INTO bd_transactions (user_id, type, amount, description) VALUES ($1,$2,$3,$4)`,
       [user.id, "signup_bonus", SIGNUP_BONUS_XD, "Welcome bonus for new users"]
     );
-    await maybeGrantAdmin(user.id, user.email);
+    // Note: admin is intentionally NOT auto-granted here — email/password registration
+    // does not verify ownership of the email address. Admin is only ever granted via a
+    // verified Google account (see /bd/auth/google) so it can't be claimed by anyone who
+    // simply knows the configured admin email.
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "30d" });
     return res.json({ token, user: sanitizeUser(user), isNew: true });
   } catch (err: any) {
@@ -203,6 +211,7 @@ router.post("/bd/auth/google", async (req: Request, res: Response) => {
     const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
     const payload = ticket.getPayload();
     if (!payload?.email) return res.status(401).json({ error: "Invalid Google credential" });
+    if (!payload.email_verified) return res.status(401).json({ error: "Google account email is not verified" });
 
     const email = payload.email.toLowerCase().trim();
     const googleId = payload.sub;
@@ -251,7 +260,7 @@ router.post("/bd/auth/login", async (req: Request, res: Response) => {
       }
     }
     if (!ok) return res.status(401).json({ error: "Invalid email or password" });
-    await maybeGrantAdmin(user.id, user.email);
+    // Admin is only granted via verified Google sign-in — see note in /bd/auth/register.
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "30d" });
     return res.json({ token, user: sanitizeUser(user), isNew: false });
   } catch (err: any) {
@@ -317,7 +326,7 @@ router.get("/bd/bots", authMiddleware, async (req: Request, res: Response) => {
     "SELECT * FROM bd_bots WHERE user_id=$1 ORDER BY created_at DESC",
     [user.id]
   );
-  return res.json({ bots: result.rows });
+  return res.json({ bots: result.rows.map(sanitizeBot) });
 });
 
 router.get("/bd/bots/check-name", authMiddleware, async (req: Request, res: Response) => {
@@ -384,7 +393,7 @@ router.post("/bd/bots", authMiddleware, async (req: Request, res: Response) => {
   );
 
   deployToHeroku(bot.id, herokuCfg.api_key, herokuAppName, herokuCfg.team, mergedEnv).catch(console.error);
-  return res.json({ bot, message: "Bot is being deployed to Heroku..." });
+  return res.json({ bot: sanitizeBot(bot), message: "Bot is being deployed to Heroku..." });
 });
 
 async function appendLog(botId: number, log: string) {
@@ -499,7 +508,7 @@ router.get("/bd/bots/:id", authMiddleware, async (req: Request, res: Response) =
   const user = (req as any).user;
   const result = await pool.query("SELECT * FROM bd_bots WHERE id=$1 AND user_id=$2", [req.params.id, user.id]);
   if (!result.rows[0]) return res.status(404).json({ error: "Bot not found" });
-  return res.json({ bot: result.rows[0] });
+  return res.json({ bot: sanitizeBot(result.rows[0]) });
 });
 
 router.put("/bd/bots/:id/env", authMiddleware, async (req: Request, res: Response) => {
@@ -631,7 +640,7 @@ router.get("/bd/admin/bots", authMiddleware, adminMiddleware, async (_req: Reque
      FROM bd_bots b JOIN bd_users u ON b.user_id = u.id
      ORDER BY b.created_at DESC`
   );
-  return res.json({ bots: result.rows });
+  return res.json({ bots: result.rows.map(sanitizeBot) });
 });
 
 router.get("/bd/admin/payments/all", authMiddleware, adminMiddleware, async (_req: Request, res: Response) => {

@@ -38,3 +38,11 @@ export const BOT_ENV_DEFAULTS: Record<string, string> = {
 export function botRepoTarballApiUrl(): string {
   return `https://api.github.com/repos/${LINKS.BOT_REPO_OWNER}/${LINKS.BOT_REPO_NAME}/tarball/${LINKS.BOT_REPO_BRANCH}`;
 }
+
+// Canonical public URL of this app, used when we need to hand Heroku a URL
+// it can fetch (e.g. the bot-template tarball proxy). Prefer an explicitly
+// configured value over the inbound request's host/protocol, since those
+// can vary with proxies and aren't guaranteed to match the real public URL.
+export function getPublicOrigin(requestOrigin: string): string {
+  return process.env.PUBLIC_APP_URL || requestOrigin;
+}

@@ -5,7 +5,7 @@ import { Pool } from "pg";
 import fs from "fs";
 import path from "path";
 import { OAuth2Client } from "google-auth-library";
-import { LINKS, BOT_ENV_DEFAULTS, botRepoTarballApiUrl } from "../config";
+import { LINKS, BOT_ENV_DEFAULTS, botRepoTarballApiUrl, getPublicOrigin } from "../config";
 
 const router = Router();
 
@@ -380,7 +380,7 @@ router.post("/bd/bots", authMiddleware, async (req: Request, res: Response) => {
     [user.id, "deploy", -DEPLOY_COST_XD, `Deployed bot: ${bot_name}`]
   );
 
-  const publicOrigin = `${req.protocol}://${req.get("host")}`;
+  const publicOrigin = getPublicOrigin(`${req.protocol}://${req.get("host")}`);
   deployToHeroku(bot.id, herokuCfg.api_key, herokuAppName, herokuCfg.team, mergedEnv, publicOrigin).catch(console.error);
   return res.json({ bot: sanitizeBot(bot), message: "Bot is being deployed to Heroku..." });
 });
@@ -393,12 +393,39 @@ async function appendLog(botId: number, log: string) {
 }
 
 // The bot repo is private, so Heroku's build API (which fetches the tarball
-// URL itself, unauthenticated) can't pull it directly from GitHub. We proxy
-// it through our own server — authenticated with our GITHUB_TOKEN — so
-// Heroku can fetch a plain, public URL instead.
-router.get("/bd/deploy-template.tar.gz", async (_req: Request, res: Response) => {
-  const token = process.env.GITHUB_TOKEN || "";
+// URL itself, unauthenticated, with no custom headers) can't pull it
+// directly from GitHub. We proxy it through our own server — authenticated
+// with our GITHUB_TOKEN — so Heroku can fetch a plain URL instead. To avoid
+// turning this into a public download of otherwise-private source code, the
+// route requires a server-only shared secret as a query token, caches the
+// tarball briefly to avoid refetching GitHub on every build, and applies a
+// basic per-minute rate limit in case the token ever leaks.
+const DEPLOY_PROXY_TOKEN = process.env.DEPLOY_PROXY_TOKEN || "";
+let tarballCache: { buf: Buffer; fetchedAt: number } | null = null;
+const TARBALL_CACHE_MS = 5 * 60 * 1000;
+const tarballRateLimit = { count: 0, windowStart: 0 };
+const TARBALL_RATE_LIMIT_PER_MIN = 20;
+
+router.get("/bd/deploy-template.tar.gz", async (req: Request, res: Response) => {
+  if (!DEPLOY_PROXY_TOKEN || req.query.token !== DEPLOY_PROXY_TOKEN) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  const now = Date.now();
+  if (now - tarballRateLimit.windowStart > 60_000) {
+    tarballRateLimit.windowStart = now;
+    tarballRateLimit.count = 0;
+  }
+  tarballRateLimit.count++;
+  if (tarballRateLimit.count > TARBALL_RATE_LIMIT_PER_MIN) {
+    return res.status(429).json({ error: "Too many requests" });
+  }
+
   try {
+    if (tarballCache && now - tarballCache.fetchedAt < TARBALL_CACHE_MS) {
+      res.setHeader("Content-Type", "application/gzip");
+      return res.send(tarballCache.buf);
+    }
+    const token = process.env.GITHUB_TOKEN || "";
     const ghRes = await fetch(botRepoTarballApiUrl(), {
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -410,11 +437,10 @@ router.get("/bd/deploy-template.tar.gz", async (_req: Request, res: Response) =>
     if (!ghRes.ok || !ghRes.body) {
       return res.status(502).json({ error: `Failed to fetch bot template (${ghRes.status})` });
     }
+    const buf = Buffer.from(await ghRes.arrayBuffer());
+    tarballCache = { buf, fetchedAt: now };
     res.setHeader("Content-Type", "application/gzip");
-    // @ts-ignore - Node's Response body is a web ReadableStream; pipe it through.
-    const { Readable } = await import("stream");
-    Readable.fromWeb(ghRes.body as any).pipe(res);
-    return;
+    return res.send(buf);
   } catch (e: any) {
     return res.status(500).json({ error: e.message });
   }
@@ -448,7 +474,10 @@ async function deployToHeroku(
 
     if (!createRes.ok) {
       const err = await createRes.json() as any;
-      if (err?.message?.includes("already exists") || err?.id === "invalid_params") {
+      const isNameConflict =
+        err?.id === "name_taken" ||
+        /already\s+(exists|taken)|not\s+available|is\s+already\s+in\s+use/i.test(err?.message || "");
+      if (isNameConflict) {
         await appendLog(botId, `[${ts()}] App name conflict — retrying with suffix...`);
         const altName = `${appName.slice(0, 25)}-${Math.floor(Math.random() * 999)}`;
         await pool.query("UPDATE bd_bots SET heroku_app_name=$1 WHERE id=$2", [altName, botId]);
@@ -474,7 +503,7 @@ async function deployToHeroku(
     // than app-setups). The repo is private, so we proxy it through our own
     // server (see /bd/deploy-template.tar.gz) instead of pointing Heroku at
     // GitHub directly, which it can't authenticate against.
-    const tarballUrl = `${publicOrigin}/api/bd/deploy-template.tar.gz`;
+    const tarballUrl = `${publicOrigin}/api/bd/deploy-template.tar.gz?token=${encodeURIComponent(DEPLOY_PROXY_TOKEN)}`;
     await appendLog(botId, `[${ts()}] Building from GitHub repo (${LINKS.BOT_REPO_OWNER}/${LINKS.BOT_REPO_NAME})...`);
     const buildRes = await fetch(`https://api.heroku.com/apps/${appName}/builds`, {
       method: "POST",
